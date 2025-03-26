@@ -21,7 +21,7 @@ from scene import Scene, GaussianModel
 from utils.general_utils import safe_state
 import uuid
 from tqdm import tqdm
-from utils.image_utils import psnr, render_net_image, compute_diff_with_mask
+from utils.image_utils import psnr, render_net_image, compute_image_diff
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 import torchvision
@@ -71,8 +71,8 @@ def training(dataset_name, dataset, opt, pipe, testing_iterations, saving_iterat
     
     start_normal_iter = 7000
     start_dist_iter = 3000
-    use_depth_loss = False
-    use_normal_loss = False
+    use_depth_loss = True
+    use_normal_loss = True
     use_alpha_loss = True
         
     for iteration in range(first_iter, opt.iterations + 1):        
@@ -164,12 +164,12 @@ def training(dataset_name, dataset, opt, pipe, testing_iterations, saving_iterat
                 gt_image_np = (gt_image_np * 255).astype(np.uint8)
                 rgb_image = np.hstack((image_np, gt_image_np))
                 
-                # depth with magma colormap
+                # depth
                 depth_np = render_pkg["render_depth"].squeeze().detach().cpu().numpy()
-                depth_vis = depth2rgb(depth_np, min_value=depth_np.min(), max_value=depth_np.max(), colormap="magma")
+                depth_vis = depth2rgb(depth_np, min_value=depth_np.min(), max_value=depth_np.max(), colormap='magma')
                 if use_depth_loss:
                     gt_depth_np = gt_depth.squeeze().detach().cpu().numpy()
-                    gt_depth_vis = depth2rgb(gt_depth_np, min_value=gt_depth_np.min(), max_value=gt_depth_np.max(), colormap="magma")
+                    gt_depth_vis = depth2rgb(gt_depth_np, min_value=gt_depth_np.min(), max_value=gt_depth_np.max(), colormap='magma')
                 else:
                     gt_depth_vis = np.zeros_like(depth_vis)
                 depth_image = np.hstack((depth_vis, gt_depth_vis))
@@ -199,54 +199,25 @@ def training(dataset_name, dataset, opt, pipe, testing_iterations, saving_iterat
                 surf_normal_vis = ((surf_normal_np + 1) / 2.0 * 255).clip(0, 255).astype(np.uint8)
                 normal_image = np.hstack((rend_normal_vis, surf_normal_vis))
                 
-                # 改进的差异图像计算方法
-                # RGB差异
-                def compute_improved_diff(img1, img2, mask=None):
-                    if mask is None:
-                        mask = np.ones(img1.shape[:2], dtype=bool)
-                    if len(img1.shape) == 3 and img1.shape[2] == 3:
-                        # RGB图像：计算每个像素的L2距离（欧几里得距离）
-                        diff = np.sqrt(np.sum((img1.astype(float) - img2.astype(float))**2, axis=2))
-                    else:
-                        # 灰度图像或深度图：计算绝对差异
-                        diff = np.abs(img1.astype(float) - img2.astype(float))
-                    
-                    # 归一化并应用mask
-                    if np.max(diff) > 0:
-                        diff = diff / np.max(diff) * 255
-                    diff = diff * mask
-                    
-                    # 应用magma colormap
-                    import matplotlib.pyplot as plt
-                    from matplotlib import cm
-                    magma_cmap = cm.get_cmap('magma')
-                    diff_colored = magma_cmap(diff.astype(np.uint8)/255.0)[:,:,:3] * 255
-                    return diff_colored.astype(np.uint8)
-                
                 mask = gt_alpha_mask.squeeze().detach().cpu().numpy() > 0.5
-                
-                # 计算改进的差异图像
-                rgb_diff_image = compute_improved_diff(image_np, gt_image_np, mask)
-
-                # 深度差异
+                # rgb
+                rgb_diff_image = compute_image_diff(image_np, gt_image_np, mask)
+                # depth
                 if use_depth_loss:
                     depth_mask = gt_depth_mask.squeeze().detach().cpu().numpy()
-                    depth_loss_image = compute_improved_diff(depth_vis, gt_depth_vis, depth_mask)
+                    depth_loss_image = compute_image_diff(depth_vis, gt_depth_vis, depth_mask)
                 else:
                     depth_loss_image = np.zeros_like(rgb_diff_image)
-
-                # Alpha差异
+                # alpha
                 if use_alpha_loss:
-                    alpha_loss_image = compute_improved_diff(mask_np, gt_mask_np, mask)
+                    alpha_loss_image = compute_image_diff(mask_np, gt_mask_np, mask)
                 else:
                     alpha_loss_image = np.zeros_like(rgb_diff_image)
-
-                # 法线差异
-                normal_loss_image = compute_improved_diff(rend_normal_vis, surf_normal_vis, mask)
-                
+                # normal
+                normal_loss_image = compute_image_diff(rend_normal_vis, surf_normal_vis, mask)
                 rgb_image_with_loss = np.hstack((rgb_image, rgb_diff_image))
-                depth_image_with_loss = np.hstack((depth_image, depth_loss_image))
                 mask_image_with_loss = np.hstack((mask_image, alpha_loss_image))
+                depth_image_with_loss = np.hstack((depth_image, depth_loss_image))
                 normal_image_with_loss = np.hstack((normal_image, normal_loss_image))
                 
                 runtime_image = np.vstack((rgb_image_with_loss, mask_image_with_loss, depth_image_with_loss, normal_image_with_loss))

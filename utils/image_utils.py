@@ -61,10 +61,21 @@ def render_net_image(render_pkg, render_items, render_mode, camera):
         net_image = colormap(net_image)
     return net_image
 
-def compute_diff_with_mask(image, gt_image, alpha_mask):
-    if alpha_mask.ndim == 2:
-        alpha_mask = np.expand_dims(alpha_mask, axis=-1)
-    alpha_mask = np.repeat(alpha_mask, 3, axis=-1)
-
-    diff_image = np.abs(image - gt_image) * alpha_mask
-    return diff_image
+def compute_image_diff(img1, img2, mask=None):
+    if mask is None:
+        mask = np.ones(img1.shape[:2], dtype=bool)
+    if len(img1.shape) == 3 and img1.shape[2] == 3:
+        # rgb: compute euclidean distance
+        diff = np.sqrt(np.sum((img1.astype(float) - img2.astype(float))**2, axis=2))
+    else:
+        # depth: compute absolute difference
+        diff = np.abs(img1.astype(float) - img2.astype(float))
+    
+    if np.max(diff) > 0:
+        diff = diff / np.max(diff) * 255
+    diff = diff * mask
+    
+    from matplotlib import cm
+    magma_cmap = cm.get_cmap('magma')
+    diff_colored = magma_cmap(diff.astype(np.uint8)/255.0)[:,:,:3] * 255
+    return diff_colored.astype(np.uint8)
