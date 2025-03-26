@@ -114,10 +114,13 @@ def read_points3D_text(path):
                 elems = line.split()
                 xyz = np.array(tuple(map(float, elems[1:4])))
                 rgb = np.array(tuple(map(int, elems[4:7])))
-                error = np.array(float(elems[7]))
+                if len(elems) == 8:
+                    error = np.array(float(elems[7]))
+                    errors[count] = error
+                else:
+                    errors[count] = 1
                 xyzs[count] = xyz
                 rgbs[count] = rgb
-                errors[count] = error
                 count += 1
 
     return xyzs, rgbs, errors
@@ -168,7 +171,8 @@ def read_intrinsics_text(path):
                 elems = line.split()
                 camera_id = int(elems[0])
                 model = elems[1]
-                assert model == "PINHOLE", "While the loader support other types, the rest of the code assumes PINHOLE"
+                # assert model == "PINHOLE", "While the loader support other types, the rest of the code assumes PINHOLE"
+                assert model == "PINHOLE" or model == "SIMPLE_PINHOLE" or model == "SIMPLE_RADIAL", "Check the model type"
                 width = int(elems[2])
                 height = int(elems[3])
                 params = np.array(tuple(map(float, elems[4:])))

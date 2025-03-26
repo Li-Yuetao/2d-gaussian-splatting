@@ -9,6 +9,7 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
+import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
@@ -59,3 +60,11 @@ def render_net_image(render_pkg, render_items, render_mode, camera):
     if net_image.shape[0]==1:
         net_image = colormap(net_image)
     return net_image
+
+def compute_diff_with_mask(image, gt_image, alpha_mask):
+    if alpha_mask.ndim == 2:
+        alpha_mask = np.expand_dims(alpha_mask, axis=-1)
+    alpha_mask = np.repeat(alpha_mask, 3, axis=-1)
+
+    diff_image = np.abs(image - gt_image) * alpha_mask
+    return diff_image

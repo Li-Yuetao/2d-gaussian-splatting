@@ -11,6 +11,8 @@
 
 import os
 import sys
+import os.path as osp
+import cv2
 from PIL import Image
 from typing import NamedTuple
 from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, \
@@ -25,11 +27,14 @@ from scene.gaussian_model import BasicPointCloud
 
 class CameraInfo(NamedTuple):
     uid: int
+    K: np.array
     R: np.array
     T: np.array
     FovY: np.array
     FovX: np.array
     image: np.array
+    mask: np.array
+    depth: np.array
     image_path: str
     image_name: str
     width: int
@@ -65,8 +70,94 @@ def getNerfppNorm(cam_info):
 
     return {"translate": translate, "radius": radius}
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
+def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, masks_folder, depths_folder):
     cam_infos = []
+    for idx, key in enumerate(cam_extrinsics):
+        sys.stdout.write('\r')
+        # the exact output you're looking for:
+        sys.stdout.write("Reading camera {}/{}".format(idx+1, len(cam_extrinsics)))
+        sys.stdout.flush()
+
+        extr = cam_extrinsics[key]
+        intr = cam_intrinsics[extr.camera_id]
+        height = intr.height
+        width = intr.width
+
+        uid = intr.id
+        R = np.transpose(qvec2rotmat(extr.qvec))
+        T = np.array(extr.tvec)
+        image_path = os.path.join(images_folder, os.path.basename(extr.name))
+        image = Image.open(image_path)
+        
+        if intr.model=="SIMPLE_PINHOLE":
+            focal_length_x = intr.params[0]
+            FovY = focal2fov(focal_length_x, height)
+            FovX = focal2fov(focal_length_x, width)
+        elif intr.model=="PINHOLE":
+            focal_length_x = intr.params[0]
+            focal_length_y = intr.params[1]
+            FovY = focal2fov(focal_length_y, height)
+            FovX = focal2fov(focal_length_x, width)
+            K = np.array([[focal_length_x, 0, intr.params[2]],
+                          [0, focal_length_y, intr.params[3]],
+                          [0, 0, 1]])
+            if len(intr.params) >= 8:
+                D = np.array(intr.params[4:8])
+            else:
+                D = np.zeros(4)
+        elif intr.model=="SIMPLE_RADIAL":
+            f, cx, cy, r = intr.params
+            FovY = focal2fov(f, height)
+            FovX = focal2fov(f, width)
+            prcppoint = np.array([cx / width, cy / height])
+            K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
+            D = np.array([r, 0, 0, 0])  # Only radial distortion
+        else:
+            assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
+        
+        if not np.all(D == 0):
+            # undistortion
+            image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+            image_undistorted = cv2.undistort(image_cv, K, D, None)
+            image_undistorted = cv2.cvtColor(image_undistorted, cv2.COLOR_BGR2RGB)
+            image = Image.fromarray(image_undistorted)
+
+        mask_path = os.path.join(masks_folder, os.path.basename(extr.name))
+        depth_path = os.path.join(depths_folder, os.path.basename(extr.name.split(".")[0] + ".png"))
+        image_name = os.path.basename(image_path).split(".")[0]
+        if os.path.exists(mask_path):
+            mask = Image.open(mask_path)
+        else:
+            mask = None
+        if os.path.exists(depth_path):
+            # legacy: depth = Image.open(depth_path)
+            depth = cv2.imread(depth_path, cv2.IMREAD_ANYDEPTH) / 6553.5 # 1000.0
+            depth = depth.astype(np.float32)
+            # depth = np.load(depth_path)
+        else:
+            depth = None
+
+        cam_info = CameraInfo(uid=uid, K=K, R=R, T=T, FovY=FovY, FovX=FovX, image=image, mask=mask, depth=depth,
+                              image_path=image_path, image_name=image_name, width=width, height=height)
+        cam_infos.append(cam_info)
+    sys.stdout.write('\n')
+    return cam_infos
+
+def readColmapCameras_GaussianObject(cam_extrinsics, cam_intrinsics, images_folder, extra_opts=None):
+    # NOTE: ref GaussianObject
+    cam_infos = []
+
+    # direct load resized images, not the original ones
+    if extra_opts.resolution in [1, 2, 4, 8]:
+        tmp_images_folder = images_folder + f'_{str(extra_opts.resolution)}' if extra_opts.resolution != 1 else images_folder
+        if not osp.exists(tmp_images_folder):
+            print(f"The {tmp_images_folder} is not found, use original resolution images")
+        else:
+            print(f"Using resized images in {tmp_images_folder}...")
+            images_folder = tmp_images_folder
+    else:
+        print("use original resolution images")
+
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
         # the exact output you're looking for:
@@ -86,7 +177,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
             focal_length_x = intr.params[0]
             FovY = focal2fov(focal_length_x, height)
             FovX = focal2fov(focal_length_x, width)
-        elif intr.model=="PINHOLE":
+        elif intr.model=="PINHOLE": 
             focal_length_x = intr.params[0]
             focal_length_y = intr.params[1]
             FovY = focal2fov(focal_length_y, height)
@@ -94,12 +185,29 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         else:
             assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
 
-        image_path = os.path.join(images_folder, os.path.basename(extr.name))
-        image_name = os.path.basename(image_path).split(".")[0]
+        K = np.array([[focal_length_x, 0, intr.params[2]],
+                      [0, focal_length_y, intr.params[3]],
+                      [0, 0, 1]])
+        
+        image_path = osp.join(images_folder, osp.basename(extr.name))
+        image_name = osp.basename(image_path).split(".")[0]
         image = Image.open(image_path)
 
-        cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                              image_path=image_path, image_name=image_name, width=width, height=height)
+        ### load masks
+        mask_path_png = osp.join(osp.dirname(images_folder), "masks", osp.basename(
+            image_path).replace(osp.splitext(osp.basename(image_path))[-1], '.png'))
+
+        if osp.exists(mask_path_png) and hasattr(extra_opts, "use_mask") and extra_opts.use_mask:
+            mask = cv2.imread(mask_path_png, cv2.IMREAD_GRAYSCALE).astype(np.uint8)
+            mask = mask.astype(np.float32) / 255.0
+        else:
+            mask = None
+
+        mono_depth = None
+
+        cam_info = CameraInfo(uid=uid, K=K, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
+                              image_path=image_path, image_name=image_name, 
+                              width=width, height=height, mask=mask, depth=mono_depth)
         cam_infos.append(cam_info)
     sys.stdout.write('\n')
     return cam_infos
@@ -129,7 +237,7 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
-def readColmapSceneInfo(path, images, eval, llffhold=8):
+def readColmapSceneInfo(path, images, eval, llffhold=8, dataset=''):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -142,7 +250,23 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     reading_dir = "images" if images == None else images
-    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
+    
+    if dataset == 'gaussianobject':
+        extra_opts = type('extra_opts', (object,), {})()
+        extra_opts.resolution = 1
+        extra_opts.use_mask = True
+        cam_infos_unsorted = readColmapCameras_GaussianObject(cam_extrinsics=cam_extrinsics, 
+                                            cam_intrinsics=cam_intrinsics, 
+                                            images_folder=os.path.join(path, reading_dir), 
+                                            extra_opts=extra_opts)
+    else:
+        # default
+        cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, 
+                                               cam_intrinsics=cam_intrinsics, 
+                                               images_folder=os.path.join(path, reading_dir), 
+                                               masks_folder=os.path.join(path, "masks"),
+                                               depths_folder=os.path.join(path, "depths"))
+        
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
     if eval:

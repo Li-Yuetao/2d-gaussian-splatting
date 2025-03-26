@@ -18,9 +18,12 @@ import random
 def inverse_sigmoid(x):
     return torch.log(x/(1-x))
 
-def PILtoTorch(pil_image, resolution):
+def PILtoTorch(pil_image, resolution, is_depth=False):
     resized_image_PIL = pil_image.resize(resolution)
-    resized_image = torch.from_numpy(np.array(resized_image_PIL)) / 255.0
+    if is_depth:
+        resized_image = torch.from_numpy(np.array(resized_image_PIL)).float()
+    else:
+        resized_image = torch.from_numpy(np.array(resized_image_PIL)) / 255.0
     if len(resized_image.shape) == 3:
         return resized_image.permute(2, 0, 1)
     else:
@@ -161,6 +164,8 @@ def create_rotation_matrix_from_direction_vector_batch(direction_vectors):
 
 
 def colormap(img, cmap='jet'):
+    import matplotlib
+    matplotlib.use('Agg') 
     import matplotlib.pyplot as plt
     W, H = img.shape[:2]
     dpi = 300

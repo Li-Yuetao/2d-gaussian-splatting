@@ -12,7 +12,10 @@
 from scene.cameras import Camera
 import numpy as np
 from utils.general_utils import PILtoTorch
+from PIL import Image
 from utils.graphics_utils import fov2focal
+import torch.nn.functional as F
+import cv2
 
 WARNED = False
 
@@ -38,19 +41,33 @@ def loadCam(args, id, cam_info, resolution_scale):
         scale = float(global_down) * float(resolution_scale)
         resolution = (int(orig_w / scale), int(orig_h / scale))
 
+    loaded_mask = None
     if len(cam_info.image.split()) > 3:
         import torch
         resized_image_rgb = torch.cat([PILtoTorch(im, resolution) for im in cam_info.image.split()[:3]], dim=0)
         loaded_mask = PILtoTorch(cam_info.image.split()[3], resolution)
         gt_image = resized_image_rgb
     else:
+        import torch
         resized_image_rgb = PILtoTorch(cam_info.image, resolution)
-        loaded_mask = None
+        # loaded_mask = None
+
+        # use masked image to train
+        if args.name == 'gaussianobject':
+            # NOTE: ref GaussianObject
+            if cam_info.mask is not None:
+                resized_mask = resize_mask_image(cam_info.mask, resolution)
+                loaded_mask = torch.from_numpy(resized_mask).unsqueeze(0)
+            else:
+                loaded_mask = None
+        else:
+            if cam_info.mask is not None:
+                loaded_mask = PILtoTorch(cam_info.mask, resolution)
         gt_image = resized_image_rgb
 
-    return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
+    return Camera(resolution, colmap_id=cam_info.uid, K=cam_info.K, R=cam_info.R, T=cam_info.T, 
                   FoVx=cam_info.FovX, FoVy=cam_info.FovY, 
-                  image=gt_image, gt_alpha_mask=loaded_mask,
+                  image=gt_image, gt_alpha_mask=loaded_mask, gt_depth=cam_info.depth,
                   image_name=cam_info.image_name, uid=id, data_device=args.data_device)
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):
@@ -82,3 +99,22 @@ def camera_to_JSON(id, camera : Camera):
         'fx' : fov2focal(camera.FovX, camera.width)
     }
     return camera_entry
+
+def resize_mask_image(mask, resolution):
+    """
+    Resize the image to the specified resolution.
+
+    Args:
+        mask (np.array): Input mask image as a NumPy array with shape (h, w).
+        resolution (tuple): Target resolution as a tuple (width, height).
+
+    Returns:
+        np.array: Resized mask image as a NumPy array with shape (h, w).
+    """
+    # Ensure that resolution is in (width, height) format
+    width, height = resolution
+
+    # Resize the mask image
+    resized_mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
+
+    return resized_mask

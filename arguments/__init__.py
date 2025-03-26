@@ -51,7 +51,7 @@ class ModelParams(ParamGroup):
         self._model_path = ""
         self._images = "images"
         self._resolution = -1
-        self._white_background = False
+        self._white_background = True
         self.data_device = "cuda"
         self.eval = False
         self.render_items = ['RGB', 'Alpha', 'Normal', 'Depth', 'Edge', 'Curvature']
@@ -83,6 +83,9 @@ class OptimizationParams(ParamGroup):
         self.rotation_lr = 0.001
         self.percent_dense = 0.01
         self.lambda_dssim = 0.2
+        self.lambda_rgb = 0.1
+        self.lambda_depth = 0.2 # 1.0
+        self.lambda_alpha = 0.5 # 0.1
         self.lambda_dist = 0.0
         self.lambda_normal = 0.05
         self.opacity_cull = 0.05

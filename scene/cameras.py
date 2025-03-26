@@ -12,10 +12,11 @@
 import torch
 from torch import nn
 import numpy as np
+import cv2
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix
 
 class Camera(nn.Module):
-    def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
+    def __init__(self, resolution, colmap_id, K, R, T, FoVx, FoVy, image, gt_alpha_mask, gt_depth,
                  image_name, uid,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda"
                  ):
@@ -23,6 +24,7 @@ class Camera(nn.Module):
 
         self.uid = uid
         self.colmap_id = colmap_id
+        self.K = K
         self.R = R
         self.T = T
         self.FoVx = FoVx
@@ -46,6 +48,22 @@ class Camera(nn.Module):
         else:
             # self.original_image *= torch.ones((1, self.image_height, self.image_width), device=self.data_device) # do we need this?
             self.gt_alpha_mask = None
+        
+        self.gt_depth = None
+        self.depth_reliable = False
+        if gt_depth is not None:
+            invdepthmapScaled = gt_depth
+            invdepthmapScaled = cv2.resize(invdepthmapScaled, resolution)
+            invdepthmapScaled[invdepthmapScaled < 0] = 0
+            if invdepthmapScaled.ndim != 2:
+                invdepthmapScaled = invdepthmapScaled[..., 0]
+            self.gt_depth = torch.from_numpy(invdepthmapScaled[None]).to(self.data_device)
+
+            # if self.alpha_mask is not None:
+            #     self.depth_mask = self.alpha_mask.clone()
+            # else:
+            #     self.depth_mask = torch.ones_like(self.gt_depth > 0)
+            self.depth_reliable = True
         
         self.zfar = 100.0
         self.znear = 0.01
